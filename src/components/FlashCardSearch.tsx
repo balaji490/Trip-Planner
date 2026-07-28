@@ -155,56 +155,71 @@ export const FlashCardSearch: React.FC<FlashCardSearchProps> = ({ onApplyTripPla
         console.warn('Geocoding fallback:', e);
       }
 
-      // 2. Ask Groq AI for real landmarks
+      // 2. Ask Groq AI for real landmarks via Server Proxy / Serverless Function
       let aiLandmarks: string[] = [];
 
-      if (GROQ_API_KEY) {
-        try {
-          const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${GROQ_API_KEY}`,
-            },
-            body: JSON.stringify({
-              model: 'llama-3.3-70b-versatile',
-              messages: [
-                {
-                  role: 'system',
-                  content: `You are a travel landmark expert. Return ONLY a valid JSON object (no markdown, no code fences) in this exact format:
+      try {
+        const payload = {
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            {
+              role: 'system',
+              content: `You are a travel landmark expert. Return ONLY a valid JSON object (no markdown, no code fences) in this exact format:
 {"landmarks": ["Landmark 1", "Landmark 2", ...]}
 Rules:
 - Return EXACTLY ${landmarksNeeded} landmarks.
 - Every landmark MUST be a real, famous place located IN "${resolvedName}, ${countryName}". No other cities.
 - Include temples, forts, beaches, parks, museums, viewpoints, markets that actually exist there.
 - Return ONLY the JSON. No other text.`
-                },
-                {
-                  role: 'user',
-                  content: `List ${landmarksNeeded} famous tourist landmarks in ${resolvedName}, ${countryName}.`
-                }
-              ],
-              temperature: 0.3,
-              max_tokens: 600,
-            })
-          });
-
-          if (groqRes.ok) {
-            const data = await groqRes.json();
-            const raw = data.choices?.[0]?.message?.content || '';
-            try {
-              const jsonStr = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
-              const parsed = JSON.parse(jsonStr);
-              if (parsed.landmarks?.length > 0) {
-                aiLandmarks = parsed.landmarks.map((lm: string) => lm.trim()).filter((lm: string) => lm.length > 0);
-              }
-            } catch {
-              console.warn('Groq JSON parse fallback');
+            },
+            {
+              role: 'user',
+              content: `List ${landmarksNeeded} famous tourist landmarks in ${resolvedName}, ${countryName}.`
             }
-          }
-        } catch (err) {
-          console.warn('Groq API fallback:', err);
+          ],
+          temperature: 0.3,
+        };
+
+        let groqRes: Response | null = null;
+
+        // Try serverless / server proxy first (/api/groq)
+        try {
+          groqRes = await fetch('/api/groq', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+        } catch {
+          groqRes = null;
         }
+
+        // Fallback to direct Groq API fetch if proxy is unavailable locally
+        if (!groqRes || !groqRes.ok) {
+          groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${GROQ_API_KEY}`,
+            },
+            body: JSON.stringify(payload),
+          });
+        }
+
+        if (groqRes && groqRes.ok) {
+          const data = await groqRes.json();
+          const raw = data.choices?.[0]?.message?.content || '';
+          try {
+            const jsonStr = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+            const parsed = JSON.parse(jsonStr);
+            if (parsed.landmarks?.length > 0) {
+              aiLandmarks = parsed.landmarks.map((lm: string) => lm.trim()).filter((lm: string) => lm.length > 0);
+            }
+          } catch {
+            console.warn('Groq JSON parse fallback');
+          }
+        }
+      } catch (err) {
+        console.warn('Groq proxy fallback:', err);
       }
 
       // 3. Build destination
