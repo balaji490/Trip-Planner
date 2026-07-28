@@ -229,24 +229,21 @@ export const AIChatbox: React.FC<AIChatboxProps> = ({ onApplyTripPlan, className
         console.warn('Geocoding fallback:', e);
       }
 
-      // 2. Call Groq Llama 3.3 70B to get REAL landmarks for THIS SPECIFIC place
+      // 2. Call backend proxy → Groq Llama 3.3 70B for REAL landmarks for THIS SPECIFIC place
+      // The browser never calls Groq directly — all requests go through /api/groq (server.js or api/groq.js)
       let aiLandmarks: string[] = [];
       let aiNarrativeText = '';
 
-      if (GROQ_API_KEY) {
-        try {
-          const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${GROQ_API_KEY}`,
-            },
-            body: JSON.stringify({
-              model: 'llama-3.3-70b-versatile',
-              messages: [
-                {
-                  role: 'system',
-                  content: `You are a travel landmark expert. The user will give you a place name. You must return ONLY a valid JSON object (no markdown, no code fences, no explanation) in this exact format:
+      try {
+        const groqResponse = await fetch('/api/groq', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'llama-3.3-70b-versatile',
+            messages: [
+              {
+                role: 'system',
+                content: `You are a travel landmark expert. The user will give you a place name. You must return ONLY a valid JSON object (no markdown, no code fences, no explanation) in this exact format:
 {
   "city": "resolved city name",
   "landmarks": ["Landmark 1 Full Name", "Landmark 2 Full Name", ...],
@@ -259,55 +256,54 @@ Rules:
 - Include temples, forts, beaches, parks, museums, viewpoints, historic quarters, markets that are actually in "${resolvedName}".
 - Do NOT make up fake landmarks. Only use real places that actually exist in "${resolvedName}".
 - Return ONLY the JSON object. No other text.`
-                },
-                {
-                  role: 'user',
-                  content: `List ${landmarksNeeded} famous tourist landmarks and attractions located specifically in ${resolvedName}, ${countryName} for a ${parsedDays}-day trip.`
-                }
-              ],
-              temperature: 0.3,
-              max_tokens: 800,
-            })
-          });
-
-          if (groqResponse.ok) {
-            const groqData = await groqResponse.json();
-            const rawContent = groqData.choices?.[0]?.message?.content || '';
-
-            // Parse the JSON response
-            try {
-              // Strip any markdown code fences if present
-              const jsonStr = rawContent
-                .replace(/```json\s*/gi, '')
-                .replace(/```\s*/gi, '')
-                .trim();
-              const parsed = JSON.parse(jsonStr);
-
-              if (parsed.landmarks && Array.isArray(parsed.landmarks) && parsed.landmarks.length > 0) {
-                aiLandmarks = parsed.landmarks.map((lm: string) => lm.trim()).filter((lm: string) => lm.length > 0);
+              },
+              {
+                role: 'user',
+                content: `List ${landmarksNeeded} famous tourist landmarks and attractions located specifically in ${resolvedName}, ${countryName} for a ${parsedDays}-day trip.`
               }
-              if (parsed.summary) {
-                aiNarrativeText = parsed.summary;
-              }
-              if (parsed.city) {
-                resolvedName = parsed.city;
-              }
-            } catch (parseErr) {
-              console.warn('Groq JSON parse fallback, extracting landmarks from text:', parseErr);
-              // Try to extract landmark names from raw text as fallback
-              const lines = rawContent.split('\n').filter((l: string) => l.trim().length > 5);
-              for (const line of lines) {
-                const cleaned = line.replace(/^\d+[\.\)]\s*/, '').replace(/^[-*]\s*/, '').trim();
-                if (cleaned.length > 3 && cleaned.length < 100 && !cleaned.startsWith('{') && !cleaned.startsWith('"')) {
-                  aiLandmarks.push(cleaned);
-                }
+            ],
+            temperature: 0.3,
+          }),
+        });
+
+        if (groqResponse.ok) {
+          const groqData = await groqResponse.json();
+          const rawContent = groqData.choices?.[0]?.message?.content || '';
+
+          // Parse the JSON response
+          try {
+            // Strip any markdown code fences if present
+            const jsonStr = rawContent
+              .replace(/```json\s*/gi, '')
+              .replace(/```\s*/gi, '')
+              .trim();
+            const parsed = JSON.parse(jsonStr);
+
+            if (parsed.landmarks && Array.isArray(parsed.landmarks) && parsed.landmarks.length > 0) {
+              aiLandmarks = parsed.landmarks.map((lm: string) => lm.trim()).filter((lm: string) => lm.length > 0);
+            }
+            if (parsed.summary) {
+              aiNarrativeText = parsed.summary;
+            }
+            if (parsed.city) {
+              resolvedName = parsed.city;
+            }
+          } catch (parseErr) {
+            console.warn('Groq JSON parse fallback, extracting landmarks from text:', parseErr);
+            // Try to extract landmark names from raw text as fallback
+            const lines = rawContent.split('\n').filter((l: string) => l.trim().length > 5);
+            for (const line of lines) {
+              const cleaned = line.replace(/^\d+[\.]\)\s*/, '').replace(/^[-*]\s*/, '').trim();
+              if (cleaned.length > 3 && cleaned.length < 100 && !cleaned.startsWith('{') && !cleaned.startsWith('"')) {
+                aiLandmarks.push(cleaned);
               }
             }
           }
-        } catch (err) {
-          console.warn('Groq API error, falling back to local generator:', err);
         }
+      } catch (err) {
+        console.warn('Groq proxy error, falling back to local generator:', err);
       }
+
 
       // 3. Build destination object
       const generatedDest: Destination = {

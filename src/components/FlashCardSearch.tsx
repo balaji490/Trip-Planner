@@ -9,7 +9,7 @@ interface FlashCardSearchProps {
   className?: string;
 }
 
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || '';
+
 
 const QUICK_PICKS = [
   { name: 'Pondicherry', days: 3, icon: Waves },
@@ -180,32 +180,14 @@ Rules:
           temperature: 0.3,
         };
 
-        let groqRes: Response | null = null;
+        // All AI calls go through the backend proxy only — never directly to Groq
+        const groqRes = await fetch('/api/groq', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
 
-        // Try serverless / server proxy first (/api/groq)
-        try {
-          groqRes = await fetch('/api/groq', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-        } catch {
-          groqRes = null;
-        }
-
-        // Fallback to direct Groq API fetch if proxy is unavailable locally
-        if (!groqRes || !groqRes.ok) {
-          groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${GROQ_API_KEY}`,
-            },
-            body: JSON.stringify(payload),
-          });
-        }
-
-        if (groqRes && groqRes.ok) {
+        if (groqRes.ok) {
           const data = await groqRes.json();
           const raw = data.choices?.[0]?.message?.content || '';
           try {
@@ -219,7 +201,7 @@ Rules:
           }
         }
       } catch (err) {
-        console.warn('Groq proxy fallback:', err);
+        console.warn('Groq proxy error:', err);
       }
 
       // 3. Build destination
